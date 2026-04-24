@@ -12,27 +12,33 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+/* =========================
+   FILE UPLOAD SETUP
+========================= */
 const upload = multer({ dest: "uploads/" });
 
+/* =========================
+   OPENAI SETUP
+========================= */
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 /* =========================
-   PDF TEXT EXTRACTION
+   PDF TEXT EXTRACT
 ========================= */
 async function extractText(filePath) {
   try {
     const buffer = fs.readFileSync(filePath);
     const data = await pdf(buffer);
     return (data.text || "").slice(0, 6000);
-  } catch {
+  } catch (err) {
     return "Resume parsing failed";
   }
 }
 
 /* =========================
-   ATS ANALYSIS
+   ATS ANALYSIS API
 ========================= */
 app.post("/api/analyze", upload.single("resume"), async (req, res) => {
   try {
@@ -62,13 +68,14 @@ Return JSON:
         },
         {
           role: "user",
-          content: `JOB:\n${jobDesc}\n\nRESUME:\n${resumeText}`
+          content: `JOB DESCRIPTION:\n${jobDesc}\n\nRESUME:\n${resumeText}`
         }
       ]
     });
 
     const result = JSON.parse(response.choices[0].message.content);
     fs.unlinkSync(req.file.path);
+
     res.json(result);
 
   } catch (err) {
@@ -78,7 +85,7 @@ Return JSON:
 });
 
 /* =========================
-   ROLE DETECTION
+   ROLE DETECTION API
 ========================= */
 app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
   try {
@@ -102,22 +109,31 @@ app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
 
     const result = JSON.parse(response.choices[0].message.content);
     fs.unlinkSync(req.file.path);
+
     res.json(result);
 
   } catch (err) {
     console.error("ROLE ERROR:", err);
-    res.status(500).json({ error: "Role failed" });
+    res.status(500).json({ error: "Role detection failed" });
   }
 });
 
 /* =========================
-   JOB SEARCH (DEBUG VERSION)
+   JOB SEARCH API (FIXED)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
   try {
-    const { role } = req.query;
+    const { role, country } = req.query;
 
-    const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(role || "developer")}&page=1&num_pages=1`;
+    let searchQuery = `${role || "developer"} jobs`;
+
+    if (country) {
+      searchQuery += ` in ${country}`;
+    } else {
+      searchQuery += ` in usa`;
+    }
+
+    const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(searchQuery)}&page=1&num_pages=1`;
 
     const response = await fetch(url, {
       headers: {
@@ -128,14 +144,15 @@ app.get("/api/jobs", async (req, res) => {
 
     const data = await response.json();
 
-    console.log("🔍 RAW API RESPONSE:", JSON.stringify(data, null, 2));
+    console.log("SEARCH:", searchQuery);
+    console.log("RESULT COUNT:", data.data?.length);
 
     let jobs = data.data || [];
 
     jobs = jobs.slice(0, 10).map(job => ({
       title: job.job_title,
       company: job.employer_name,
-      location: job.job_city || job.job_country || "Remote",
+      location: job.job_location || job.job_city || job.job_country || "Remote",
       url: job.job_apply_link
     }));
 
@@ -147,7 +164,16 @@ app.get("/api/jobs", async (req, res) => {
   }
 });
 
-/* ========================= */
+/* =========================
+   HEALTH CHECK
+========================= */
+app.get("/", (req, res) => {
+  res.send("ATS MASTER API RUNNING");
+});
+
+/* =========================
+   START SERVER
+========================= */
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
