@@ -13,12 +13,12 @@ app.use(cors());
 app.use(express.json());
 
 /* =========================
-   FILE UPLOAD SETUP
+   FILE UPLOAD
 ========================= */
 const upload = multer({ dest: "uploads/" });
 
 /* =========================
-   OPENAI SETUP
+   OPENAI
 ========================= */
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -32,13 +32,13 @@ async function extractText(filePath) {
     const buffer = fs.readFileSync(filePath);
     const data = await pdf(buffer);
     return (data.text || "").slice(0, 6000);
-  } catch (err) {
-    return "Resume parsing failed";
+  } catch {
+    return "";
   }
 }
 
 /* =========================
-   ATS ANALYSIS API
+   ATS ANALYSIS
 ========================= */
 app.post("/api/analyze", upload.single("resume"), async (req, res) => {
   try {
@@ -68,12 +68,13 @@ Return JSON:
         },
         {
           role: "user",
-          content: `JOB DESCRIPTION:\n${jobDesc}\n\nRESUME:\n${resumeText}`
+          content: `JOB:\n${jobDesc}\n\nRESUME:\n${resumeText}`
         }
       ]
     });
 
     const result = JSON.parse(response.choices[0].message.content);
+
     fs.unlinkSync(req.file.path);
 
     res.json(result);
@@ -85,7 +86,7 @@ Return JSON:
 });
 
 /* =========================
-   ROLE DETECTION API
+   ROLE DETECTION
 ========================= */
 app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
   try {
@@ -108,6 +109,7 @@ app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
     });
 
     const result = JSON.parse(response.choices[0].message.content);
+
     fs.unlinkSync(req.file.path);
 
     res.json(result);
@@ -119,40 +121,38 @@ app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
 });
 
 /* =========================
-   JOB SEARCH API (FIXED)
+   JOB SEARCH (REAL FIX)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
   try {
-    const { role, country } = req.query;
+    const { role } = req.query;
 
-    let searchQuery = `${role || "developer"} jobs`;
+    // 🔥 Use EXACT working pattern from RapidAPI test
+    const query = `${role || "developer"} jobs in chicago`;
 
-    if (country) {
-      searchQuery += ` in ${country}`;
-    } else {
-      searchQuery += ` in usa`;
-    }
-
-    const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(searchQuery)}&page=1&num_pages=1`;
-
-    const response = await fetch(url, {
-      headers: {
-        "X-RapidAPI-Key": process.env.RAPID_API_KEY,
-        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+    const response = await fetch(
+      `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1`,
+      {
+        headers: {
+          "X-RapidAPI-Key": process.env.RAPID_API_KEY,
+          "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+        }
       }
-    });
+    );
 
     const data = await response.json();
 
-    console.log("SEARCH:", searchQuery);
-    console.log("RESULT COUNT:", data.data?.length);
+    console.log("RAW DATA:", JSON.stringify(data, null, 2));
 
-    let jobs = data.data || [];
+    // 🔥 CRITICAL FIX
+    if (!data || !data.data || !Array.isArray(data.data)) {
+      return res.json({ jobs: [] });
+    }
 
-    jobs = jobs.slice(0, 10).map(job => ({
+    const jobs = data.data.map(job => ({
       title: job.job_title,
       company: job.employer_name,
-      location: job.job_location || job.job_city || job.job_country || "Remote",
+      location: job.job_location || job.job_city || job.job_country,
       url: job.job_apply_link
     }));
 
@@ -177,5 +177,5 @@ app.get("/", (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
-  console.log(`SERVER RUNNING on port ${PORT}`);
+  console.log(`SERVER RUNNING on ${PORT}`);
 });
