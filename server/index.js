@@ -12,14 +12,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* =========================
-   FILE UPLOAD
-========================= */
 const upload = multer({ dest: "uploads/" });
 
-/* =========================
-   OPENAI
-========================= */
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -52,8 +46,7 @@ app.post("/api/analyze", upload.single("resume"), async (req, res) => {
       messages: [
         {
           role: "system",
-          content: `
-Return JSON:
+          content: `Return JSON:
 {
   "score": number,
   "matchPercent": number,
@@ -121,14 +114,21 @@ app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
 });
 
 /* =========================
-   JOB SEARCH (REAL FIX)
+   JOB SEARCH (COUNTRY BASED)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
   try {
-    const { role } = req.query;
+    const { role, country } = req.query;
 
-    // 🔥 Use EXACT working pattern from RapidAPI test
-    const query = `${role || "developer"} jobs in chicago`;
+    // 🌍 Country → City mapping
+    let location = "chicago";
+
+    if (country?.toLowerCase() === "india") location = "bangalore";
+    if (country?.toLowerCase() === "usa") location = "chicago";
+    if (country?.toLowerCase() === "uk") location = "london";
+    if (country?.toLowerCase() === "canada") location = "toronto";
+
+    const query = `${role || "developer"} jobs in ${location}`;
 
     const response = await fetch(
       `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1`,
@@ -142,14 +142,14 @@ app.get("/api/jobs", async (req, res) => {
 
     const data = await response.json();
 
-    console.log("RAW DATA:", JSON.stringify(data, null, 2));
+    console.log("QUERY:", query);
+    console.log("RAW DATA:", data);
 
-    // 🔥 CRITICAL FIX
     if (!data || !data.data || !Array.isArray(data.data)) {
       return res.json({ jobs: [] });
     }
 
-    const jobs = data.data.map(job => ({
+    const jobs = data.data.slice(0, 10).map(job => ({
       title: job.job_title,
       company: job.employer_name,
       location: job.job_location || job.job_city || job.job_country,
@@ -164,16 +164,12 @@ app.get("/api/jobs", async (req, res) => {
   }
 });
 
-/* =========================
-   HEALTH CHECK
-========================= */
+/* ========================= */
 app.get("/", (req, res) => {
   res.send("ATS MASTER API RUNNING");
 });
 
-/* =========================
-   START SERVER
-========================= */
+/* ========================= */
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
