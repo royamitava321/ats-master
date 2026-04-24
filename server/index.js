@@ -15,42 +15,44 @@ app.use(express.json());
 const upload = multer({ dest: "uploads/" });
 
 const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 /* =========================
    PDF TEXT EXTRACTION
 ========================= */
 async function extractText(filePath) {
-    const buffer = fs.readFileSync(filePath);
-    const data = await pdf(buffer);
+  const buffer = fs.readFileSync(filePath);
+  const data = await pdf(buffer);
 
-    let text = data.text || "";
+  let text = data.text || "";
 
-    if (!text || text.length < 50) {
-        return "Basic resume content";
-    }
+  if (!text || text.length < 50) {
+    return "Basic resume content";
+  }
 
-    return text.slice(0, 6000);
+  return text.slice(0, 6000);
 }
 
 /* =========================
-   ATS ANALYSIS
+   ATS ANALYSIS (CV + JD)
 ========================= */
 app.post("/api/analyze", upload.single("resume"), async (req, res) => {
-    try {
-        const jobDesc = req.body.jobDescription || "";
-        const resumeText = await extractText(req.file.path);
+  try {
+    const jobDesc = req.body.jobDescription || "";
+    const resumeText = await extractText(req.file.path);
 
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            temperature: 0.3,
-            response_format: { type: "json_object" },
-            messages: [
-                {
-                    role: "system",
-                    content: `
-Return JSON:
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.3,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `
+You are an ATS system.
+
+Return STRICT JSON:
 
 {
   "score": number,
@@ -65,52 +67,54 @@ Return JSON:
 }
 
 Rules:
-- score between 60–85
+- score must be between 60–85
 - recruiterDecision:
-  Select >= 70
-  Hold 55–69
-  Reject < 55
-- NEVER return empty arrays
+   Select >= 70
+   Hold 55–69
+   Reject < 55
+- NEVER leave arrays empty
 `
-                },
-                {
-                    role: "user",
-                    content: `JOB DESCRIPTION:\n${jobDesc}\n\nRESUME:\n${resumeText}`
-                }
-            ]
-        });
+        },
+        {
+          role: "user",
+          content: `JOB DESCRIPTION:\n${jobDesc}\n\nRESUME:\n${resumeText}`
+        }
+      ]
+    });
 
-        let result = JSON.parse(response.choices[0].message.content);
+    let result = JSON.parse(response.choices[0].message.content);
 
-        if (!result.strengths?.length) result.strengths = ["Relevant experience present"];
-        if (!result.improvements?.length) result.improvements = ["Add more role-specific keywords"];
-        if (!result.matchedKeywords?.length) result.matchedKeywords = ["communication", "analysis"];
-        if (!result.missingKeywords?.length) result.missingKeywords = ["advanced tools", "domain skills"];
+    // fallback safety
+    if (!result.strengths?.length) result.strengths = ["Relevant experience"];
+    if (!result.improvements?.length) result.improvements = ["Add more keywords"];
+    if (!result.matchedKeywords?.length) result.matchedKeywords = ["analysis"];
+    if (!result.missingKeywords?.length) result.missingKeywords = ["tools"];
 
-        fs.unlinkSync(req.file.path);
-        res.json(result);
+    fs.unlinkSync(req.file.path);
 
-    } catch (err) {
-        console.error("ATS ERROR:", err);
-        res.status(500).json({ error: "Analysis failed" });
-    }
+    res.json(result);
+
+  } catch (err) {
+    console.error("ATS ERROR:", err);
+    res.status(500).json({ error: "Analysis failed" });
+  }
 });
 
 /* =========================
-   DETECT ROLE
+   ROLE + SKILLS
 ========================= */
 app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
-    try {
-        const resumeText = await extractText(req.file.path);
+  try {
+    const resumeText = await extractText(req.file.path);
 
-        const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            temperature: 0.2,
-            response_format: { type: "json_object" },
-            messages: [
-                {
-                    role: "system",
-                    content: `
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `
 Return JSON:
 
 {
@@ -119,85 +123,83 @@ Return JSON:
 }
 
 Rules:
-- Role can be ANY profession
-- Skills must be 7–15 keywords
+- Role must be generic
+- Skills: 7–15 keywords
 `
-                },
-                {
-                    role: "user",
-                    content: resumeText
-                }
-            ]
-        });
+        },
+        {
+          role: "user",
+          content: resumeText
+        }
+      ]
+    });
 
-        let result = JSON.parse(response.choices[0].message.content);
+    let result = JSON.parse(response.choices[0].message.content);
 
-        if (!result.role) result.role = "Professional";
-        if (!result.skills?.length)
-            result.skills = ["communication", "analysis", "problem solving"];
+    if (!result.role) result.role = "Professional";
+    if (!result.skills?.length) result.skills = ["analysis", "communication"];
 
-        fs.unlinkSync(req.file.path);
-        res.json(result);
+    fs.unlinkSync(req.file.path);
 
-    } catch (err) {
-        console.error("ROLE ERROR:", err);
-        res.status(500).json({ error: "Role detection failed" });
-    }
+    res.json(result);
+
+  } catch (err) {
+    console.error("ROLE ERROR:", err);
+    res.status(500).json({ error: "Role detection failed" });
+  }
 });
 
 /* =========================
-   JOB SEARCH (SMART FIX)
+   JOB SEARCH (FIXED)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
-    try {
-        const { role, country } = req.query;
+  try {
+    const { role, country, skills } = req.query;
 
-        const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(role)}&page=1&num_pages=1`;
+    // ✅ FIX COUNTRY
+    const countryMap = {
+      india: "in",
+      usa: "us",
+      uk: "gb",
+      canada: "ca",
+      australia: "au"
+    };
 
-        const response = await fetch(url, {
-            headers: {
-                "X-RapidAPI-Key": process.env.RAPID_API_KEY,
-                "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
-            }
-        });
+    const apiCountry = countryMap[country?.toLowerCase()] || "us";
 
-        const data = await response.json();
+    const query = `${role} ${skills || ""}`;
 
-        let jobs = data.data || [];
+    const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1&country=${apiCountry}`;
 
-        // ✅ TRY FILTER
-        let filtered = jobs.filter(job => {
-            const loc = `${job.job_country || ""}`.toLowerCase();
+    const response = await fetch(url, {
+      headers: {
+        "X-RapidAPI-Key": process.env.RAPID_API_KEY,
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+      }
+    });
 
-            if (country === "in") return loc.includes("in");
-            if (country === "us") return loc.includes("us");
-            if (country === "uk") return loc.includes("gb");
-            if (country === "ca") return loc.includes("ca");
-            if (country === "au") return loc.includes("au");
+    const data = await response.json();
 
-            return false;
-        });
+    let jobs = data.data || [];
 
-        // ✅ FALLBACK (IMPORTANT)
-        if (filtered.length === 0) {
-            filtered = jobs; // show global instead of empty
-        }
+    jobs = jobs.slice(0, 10).map(job => ({
+      title: job.job_title,
+      company: job.employer_name,
+      location: job.job_country || job.job_city || "Remote",
+      url: job.job_apply_link
+    }));
 
-        const formatted = filtered.slice(0, 10).map(job => ({
-            title: job.job_title,
-            company: job.employer_name,
-            location: `${job.job_city || ""}, ${job.job_country || ""}`,
-            url: job.job_apply_link
-        }));
+    res.json({ jobs });
 
-        res.json({ jobs: formatted });
-
-    } catch (err) {
-        console.error("JOB ERROR:", err);
-        res.status(500).json({ error: "Job fetch failed" });
-    }
+  } catch (err) {
+    console.error("JOB ERROR:", err);
+    res.status(500).json({ error: "Job fetch failed" });
+  }
 });
 
-app.listen(5000, () => {
-    console.log("SERVER RUNNING http://localhost:5000");
+/* ========================= */
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`SERVER RUNNING on port ${PORT}`);
 });
