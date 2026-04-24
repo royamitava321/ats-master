@@ -25,16 +25,8 @@ async function extractText(filePath) {
   try {
     const buffer = fs.readFileSync(filePath);
     const data = await pdf(buffer);
-
-    let text = data.text || "";
-
-    if (!text || text.length < 50) {
-      return "Basic resume content";
-    }
-
-    return text.slice(0, 6000);
-  } catch (err) {
-    console.error("PDF ERROR:", err);
+    return (data.text || "").slice(0, 6000);
+  } catch {
     return "Resume parsing failed";
   }
 }
@@ -55,10 +47,7 @@ app.post("/api/analyze", upload.single("resume"), async (req, res) => {
         {
           role: "system",
           content: `
-You are an ATS system.
-
-Return STRICT JSON:
-
+Return JSON:
 {
   "score": number,
   "matchPercent": number,
@@ -69,39 +58,22 @@ Return STRICT JSON:
   "matchedKeywords": [],
   "missingKeywords": [],
   "recruiterDecision": ""
-}
-
-Rules:
-- score must be between 60–85
-- recruiterDecision:
-   Select >= 70
-   Hold 55–69
-   Reject < 55
-- NEVER leave arrays empty
-`
+}`
         },
         {
           role: "user",
-          content: `JOB DESCRIPTION:\n${jobDesc}\n\nRESUME:\n${resumeText}`
+          content: `JOB:\n${jobDesc}\n\nRESUME:\n${resumeText}`
         }
       ]
     });
 
-    let result = JSON.parse(response.choices[0].message.content);
-
-    // fallback safety
-    if (!result.strengths?.length) result.strengths = ["Relevant experience"];
-    if (!result.improvements?.length) result.improvements = ["Add more keywords"];
-    if (!result.matchedKeywords?.length) result.matchedKeywords = ["analysis"];
-    if (!result.missingKeywords?.length) result.missingKeywords = ["tools"];
-
+    const result = JSON.parse(response.choices[0].message.content);
     fs.unlinkSync(req.file.path);
-
     res.json(result);
 
   } catch (err) {
     console.error("ATS ERROR:", err);
-    res.status(500).json({ error: "Analysis failed" });
+    res.status(500).json({ error: "ATS failed" });
   }
 });
 
@@ -119,18 +91,7 @@ app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
       messages: [
         {
           role: "system",
-          content: `
-Return JSON:
-
-{
-  "role": "",
-  "skills": []
-}
-
-Rules:
-- Role must be generic
-- Skills must be 7–15 keywords
-`
+          content: `Return JSON: { "role": "", "skills": [] }`
         },
         {
           role: "user",
@@ -139,68 +100,42 @@ Rules:
       ]
     });
 
-    let result = JSON.parse(response.choices[0].message.content);
-
-    if (!result.role) result.role = "Professional";
-    if (!result.skills?.length) result.skills = ["analysis", "communication"];
-
+    const result = JSON.parse(response.choices[0].message.content);
     fs.unlinkSync(req.file.path);
-
     res.json(result);
 
   } catch (err) {
     console.error("ROLE ERROR:", err);
-    res.status(500).json({ error: "Role detection failed" });
+    res.status(500).json({ error: "Role failed" });
   }
 });
 
 /* =========================
-   JOB SEARCH (FINAL FIXED)
+   JOB SEARCH (DEBUG VERSION)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
   try {
-    const { role, country, skills } = req.query;
+    const { role } = req.query;
 
-    const countryMap = {
-      india: "in",
-      usa: "us",
-      uk: "gb",
-      canada: "ca",
-      australia: "au"
-    };
+    const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(role || "developer")}&page=1&num_pages=1`;
 
-    let apiCountry = countryMap[country?.toLowerCase()] || "us";
+    const response = await fetch(url, {
+      headers: {
+        "X-RapidAPI-Key": process.env.RAPID_API_KEY,
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+      }
+    });
 
-    const query = `${role || "developer"} ${skills || ""}`;
+    const data = await response.json();
 
-    async function fetchJobs(countryCode) {
-      const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1&country=${countryCode}`;
+    console.log("🔍 RAW API RESPONSE:", JSON.stringify(data, null, 2));
 
-      const response = await fetch(url, {
-        headers: {
-          "X-RapidAPI-Key": process.env.RAPID_API_KEY,
-          "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
-        }
-      });
-
-      return await response.json();
-    }
-
-    // First try selected country
-    let data = await fetchJobs(apiCountry);
     let jobs = data.data || [];
-
-    // Fallback to US if empty
-    if (jobs.length === 0 && apiCountry !== "us") {
-      console.log("Fallback to US jobs");
-      data = await fetchJobs("us");
-      jobs = data.data || [];
-    }
 
     jobs = jobs.slice(0, 10).map(job => ({
       title: job.job_title,
       company: job.employer_name,
-      location: job.job_country || job.job_city || "Remote",
+      location: job.job_city || job.job_country || "Remote",
       url: job.job_apply_link
     }));
 
