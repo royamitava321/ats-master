@@ -22,20 +22,25 @@ const openai = new OpenAI({
    PDF TEXT EXTRACTION
 ========================= */
 async function extractText(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  const data = await pdf(buffer);
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const data = await pdf(buffer);
 
-  let text = data.text || "";
+    let text = data.text || "";
 
-  if (!text || text.length < 50) {
-    return "Basic resume content";
+    if (!text || text.length < 50) {
+      return "Basic resume content";
+    }
+
+    return text.slice(0, 6000);
+  } catch (err) {
+    console.error("PDF ERROR:", err);
+    return "Resume parsing failed";
   }
-
-  return text.slice(0, 6000);
 }
 
 /* =========================
-   ATS ANALYSIS (CV + JD)
+   ATS ANALYSIS
 ========================= */
 app.post("/api/analyze", upload.single("resume"), async (req, res) => {
   try {
@@ -101,7 +106,7 @@ Rules:
 });
 
 /* =========================
-   ROLE + SKILLS
+   ROLE DETECTION
 ========================= */
 app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
   try {
@@ -124,7 +129,7 @@ Return JSON:
 
 Rules:
 - Role must be generic
-- Skills: 7–15 keywords
+- Skills must be 7–15 keywords
 `
         },
         {
@@ -150,13 +155,12 @@ Rules:
 });
 
 /* =========================
-   JOB SEARCH (FIXED)
+   JOB SEARCH (FINAL FIXED)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
   try {
     const { role, country, skills } = req.query;
 
-    // ✅ FIX COUNTRY
     const countryMap = {
       india: "in",
       usa: "us",
@@ -165,22 +169,33 @@ app.get("/api/jobs", async (req, res) => {
       australia: "au"
     };
 
-    const apiCountry = countryMap[country?.toLowerCase()] || "us";
+    let apiCountry = countryMap[country?.toLowerCase()] || "us";
 
-    const query = `${role} ${skills || ""}`;
+    const query = `${role || "developer"} ${skills || ""}`;
 
-    const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1&country=${apiCountry}`;
+    async function fetchJobs(countryCode) {
+      const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1&country=${countryCode}`;
 
-    const response = await fetch(url, {
-      headers: {
-        "X-RapidAPI-Key": process.env.RAPID_API_KEY,
-        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
-      }
-    });
+      const response = await fetch(url, {
+        headers: {
+          "X-RapidAPI-Key": process.env.RAPID_API_KEY,
+          "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+        }
+      });
 
-    const data = await response.json();
+      return await response.json();
+    }
 
+    // First try selected country
+    let data = await fetchJobs(apiCountry);
     let jobs = data.data || [];
+
+    // Fallback to US if empty
+    if (jobs.length === 0 && apiCountry !== "us") {
+      console.log("Fallback to US jobs");
+      data = await fetchJobs("us");
+      jobs = data.data || [];
+    }
 
     jobs = jobs.slice(0, 10).map(job => ({
       title: job.job_title,
