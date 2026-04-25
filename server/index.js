@@ -12,14 +12,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* =========================
-   FILE UPLOAD
-========================= */
 const upload = multer({ dest: "uploads/" });
 
-/* =========================
-   OPENAI SETUP
-========================= */
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -74,13 +68,10 @@ Return JSON:
     });
 
     const result = JSON.parse(response.choices[0].message.content);
-
     fs.unlinkSync(req.file.path);
-
     res.json(result);
 
   } catch (err) {
-    console.error("ATS ERROR:", err);
     res.status(500).json({ error: "ATS failed" });
   }
 });
@@ -109,25 +100,21 @@ app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
     });
 
     const result = JSON.parse(response.choices[0].message.content);
-
     fs.unlinkSync(req.file.path);
-
     res.json(result);
 
   } catch (err) {
-    console.error("ROLE ERROR:", err);
-    res.status(500).json({ error: "Role detection failed" });
+    res.status(500).json({ error: "Role failed" });
   }
 });
 
 /* =========================
-   JOB SEARCH (DYNAMIC MULTI-CITY)
+   JOB SEARCH (SMART LOOP)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
   try {
     const { role, country } = req.query;
 
-    // 🌍 Multiple cities per country
     const cityMap = {
       india: ["bangalore", "hyderabad", "pune", "mumbai", "delhi"],
       usa: ["chicago", "new york", "san francisco", "austin", "seattle"],
@@ -135,56 +122,52 @@ app.get("/api/jobs", async (req, res) => {
       canada: ["toronto", "vancouver", "montreal"]
     };
 
-    // 🎯 Pick random city
     const cities = cityMap[country?.toLowerCase()] || ["chicago"];
-    const location = cities[Math.floor(Math.random() * cities.length)];
 
-    const query = `${role || "developer"} jobs in ${location}`;
+    let jobs = [];
 
-    const response = await fetch(
-      `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1`,
-      {
-        headers: {
-          "X-RapidAPI-Key": process.env.RAPID_API_KEY,
-          "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+    for (let city of cities) {
+      const query = `${role || "developer"} jobs in ${city}`;
+
+      const response = await fetch(
+        `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1`,
+        {
+          headers: {
+            "X-RapidAPI-Key": process.env.RAPID_API_KEY,
+            "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+          }
         }
+      );
+
+      const data = await response.json();
+
+      if (data?.data && data.data.length > 0) {
+        console.log("FOUND CITY:", city);
+
+        jobs = data.data.slice(0, 10).map(job => ({
+          title: job.job_title,
+          company: job.employer_name,
+          location: job.job_location || job.job_city || job.job_country,
+          url: job.job_apply_link
+        }));
+
+        break; // stop when we get data
       }
-    );
-
-    const data = await response.json();
-
-    console.log("QUERY:", query);
-    console.log("RESULT COUNT:", data?.data?.length);
-
-    if (!data || !data.data || !Array.isArray(data.data)) {
-      return res.json({ jobs: [] });
     }
-
-    const jobs = data.data.slice(0, 10).map(job => ({
-      title: job.job_title,
-      company: job.employer_name,
-      location: job.job_location || job.job_city || job.job_country,
-      url: job.job_apply_link
-    }));
 
     res.json({ jobs });
 
   } catch (err) {
-    console.error("JOB ERROR:", err);
+    console.error(err);
     res.status(500).json({ error: "Job fetch failed" });
   }
 });
 
-/* =========================
-   HEALTH CHECK
-========================= */
+/* ========================= */
 app.get("/", (req, res) => {
   res.send("ATS MASTER API RUNNING");
 });
 
-/* =========================
-   START SERVER
-========================= */
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
