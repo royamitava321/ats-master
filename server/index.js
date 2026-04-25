@@ -14,6 +14,9 @@ app.use(express.json());
 
 const upload = multer({ dest: "uploads/" });
 
+/* =========================
+   OPENAI SETUP
+========================= */
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -32,7 +35,7 @@ async function extractText(filePath) {
 }
 
 /* =========================
-   ATS ANALYSIS (UNCHANGED)
+   ATS ANALYSIS (FINAL)
 ========================= */
 app.post("/api/analyze", upload.single("resume"), async (req, res) => {
   try {
@@ -41,28 +44,37 @@ app.post("/api/analyze", upload.single("resume"), async (req, res) => {
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.3,
+      temperature: 0.2,
       response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content: `
-Return JSON:
+You are an ATS system.
+
+Return ONLY JSON:
+
 {
   "score": number,
   "matchPercent": number,
-  "domain": "",
   "summary": "",
   "strengths": [],
-  "improvements": [],
-  "matchedKeywords": [],
-  "missingKeywords": [],
-  "recruiterDecision": ""
-}`
+  "missingSkills": [],
+  "improvements": []
+}
+
+Be strict like a real recruiter.
+`
         },
         {
           role: "user",
-          content: `JOB:\n${jobDesc}\n\nRESUME:\n${resumeText}`
+          content: `
+JOB DESCRIPTION:
+${jobDesc}
+
+RESUME:
+${resumeText}
+`
         }
       ]
     });
@@ -80,7 +92,7 @@ Return JSON:
 });
 
 /* =========================
-   ROLE DETECTION (UNCHANGED)
+   ROLE DETECTION
 ========================= */
 app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
   try {
@@ -115,13 +127,12 @@ app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
 });
 
 /* =========================
-   JOB SEARCH (FINAL FIX)
+   JOB SEARCH (FINAL FIXED)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
   try {
     const { role, country } = req.query;
 
-    // 🔥 BROAD SEARCH (NOT CITY)
     const query = `${role || "developer"} jobs`;
 
     const response = await fetch(
@@ -140,31 +151,35 @@ app.get("/api/jobs", async (req, res) => {
 
     let jobs = data.data;
 
-    // 🌍 FILTER BY COUNTRY
+    // 🌍 FILTER + FALLBACK
     if (country) {
       const c = country.toLowerCase();
 
-      jobs = jobs.filter(job => {
-        const loc = (job.job_country || "").toLowerCase();
+      let filtered = jobs.filter(job => {
+        const code = (job.job_country || "").toLowerCase();
 
-        if (c === "india") return loc.includes("in") || loc.includes("india");
-        if (c === "usa") return loc.includes("us");
-        if (c === "uk") return loc.includes("gb") || loc.includes("uk");
-        if (c === "canada") return loc.includes("ca");
+        if (c === "india") return code === "in";
+        if (c === "usa") return code === "us";
+        if (c === "uk") return code === "gb";
+        if (c === "canada") return code === "ca";
 
         return true;
       });
+
+      if (filtered.length > 0) {
+        jobs = filtered;
+      }
     }
 
-    // 🔥 REMOVE DUPLICATE CITIES (FOR VARIETY)
-    const seenCities = new Set();
+    // remove duplicate cities
+    const seen = new Set();
     const finalJobs = [];
 
     for (let job of jobs) {
       const city = job.job_city || "unknown";
 
-      if (!seenCities.has(city)) {
-        seenCities.add(city);
+      if (!seen.has(city)) {
+        seen.add(city);
 
         finalJobs.push({
           title: job.job_title,
@@ -185,11 +200,16 @@ app.get("/api/jobs", async (req, res) => {
   }
 });
 
-/* ========================= */
+/* =========================
+   ROOT
+========================= */
 app.get("/", (req, res) => {
   res.send("ATS MASTER API RUNNING");
 });
 
+/* =========================
+   START SERVER
+========================= */
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
