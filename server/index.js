@@ -12,8 +12,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+/* =========================
+   FILE UPLOAD
+========================= */
 const upload = multer({ dest: "uploads/" });
 
+/* =========================
+   OPENAI SETUP
+========================= */
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -46,7 +52,8 @@ app.post("/api/analyze", upload.single("resume"), async (req, res) => {
       messages: [
         {
           role: "system",
-          content: `Return JSON:
+          content: `
+Return JSON:
 {
   "score": number,
   "matchPercent": number,
@@ -114,19 +121,23 @@ app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
 });
 
 /* =========================
-   JOB SEARCH (COUNTRY BASED)
+   JOB SEARCH (DYNAMIC MULTI-CITY)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
   try {
     const { role, country } = req.query;
 
-    // 🌍 Country → City mapping
-    let location = "chicago";
+    // 🌍 Multiple cities per country
+    const cityMap = {
+      india: ["bangalore", "hyderabad", "pune", "mumbai", "delhi"],
+      usa: ["chicago", "new york", "san francisco", "austin", "seattle"],
+      uk: ["london", "manchester", "birmingham"],
+      canada: ["toronto", "vancouver", "montreal"]
+    };
 
-    if (country?.toLowerCase() === "india") location = "bangalore";
-    if (country?.toLowerCase() === "usa") location = "chicago";
-    if (country?.toLowerCase() === "uk") location = "london";
-    if (country?.toLowerCase() === "canada") location = "toronto";
+    // 🎯 Pick random city
+    const cities = cityMap[country?.toLowerCase()] || ["chicago"];
+    const location = cities[Math.floor(Math.random() * cities.length)];
 
     const query = `${role || "developer"} jobs in ${location}`;
 
@@ -143,7 +154,7 @@ app.get("/api/jobs", async (req, res) => {
     const data = await response.json();
 
     console.log("QUERY:", query);
-    console.log("RAW DATA:", data);
+    console.log("RESULT COUNT:", data?.data?.length);
 
     if (!data || !data.data || !Array.isArray(data.data)) {
       return res.json({ jobs: [] });
@@ -164,12 +175,16 @@ app.get("/api/jobs", async (req, res) => {
   }
 });
 
-/* ========================= */
+/* =========================
+   HEALTH CHECK
+========================= */
 app.get("/", (req, res) => {
   res.send("ATS MASTER API RUNNING");
 });
 
-/* ========================= */
+/* =========================
+   START SERVER
+========================= */
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
