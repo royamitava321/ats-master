@@ -32,7 +32,7 @@ async function extractText(filePath) {
 }
 
 /* =========================
-   ATS ANALYSIS
+   ATS ANALYSIS (UNCHANGED)
 ========================= */
 app.post("/api/analyze", upload.single("resume"), async (req, res) => {
   try {
@@ -68,16 +68,19 @@ Return JSON:
     });
 
     const result = JSON.parse(response.choices[0].message.content);
+
     fs.unlinkSync(req.file.path);
+
     res.json(result);
 
   } catch (err) {
+    console.error("ATS ERROR:", err);
     res.status(500).json({ error: "ATS failed" });
   }
 });
 
 /* =========================
-   ROLE DETECTION
+   ROLE DETECTION (UNCHANGED)
 ========================= */
 app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
   try {
@@ -100,65 +103,84 @@ app.post("/api/detect-role", upload.single("resume"), async (req, res) => {
     });
 
     const result = JSON.parse(response.choices[0].message.content);
+
     fs.unlinkSync(req.file.path);
+
     res.json(result);
 
   } catch (err) {
-    res.status(500).json({ error: "Role failed" });
+    console.error("ROLE ERROR:", err);
+    res.status(500).json({ error: "Role detection failed" });
   }
 });
 
 /* =========================
-   JOB SEARCH (SMART LOOP)
+   JOB SEARCH (FINAL FIX)
 ========================= */
 app.get("/api/jobs", async (req, res) => {
   try {
     const { role, country } = req.query;
 
-    const cityMap = {
-      india: ["bangalore", "hyderabad", "pune", "mumbai", "delhi"],
-      usa: ["chicago", "new york", "san francisco", "austin", "seattle"],
-      uk: ["london", "manchester", "birmingham"],
-      canada: ["toronto", "vancouver", "montreal"]
-    };
+    // 🔥 BROAD SEARCH (NOT CITY)
+    const query = `${role || "developer"} jobs`;
 
-    const cities = cityMap[country?.toLowerCase()] || ["chicago"];
-
-    let jobs = [];
-
-    for (let city of cities) {
-      const query = `${role || "developer"} jobs in ${city}`;
-
-      const response = await fetch(
-        `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1`,
-        {
-          headers: {
-            "X-RapidAPI-Key": process.env.RAPID_API_KEY,
-            "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
-          }
+    const response = await fetch(
+      `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(query)}&page=1&num_pages=1`,
+      {
+        headers: {
+          "X-RapidAPI-Key": process.env.RAPID_API_KEY,
+          "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
         }
-      );
-
-      const data = await response.json();
-
-      if (data?.data && data.data.length > 0) {
-        console.log("FOUND CITY:", city);
-
-        jobs = data.data.slice(0, 10).map(job => ({
-          title: job.job_title,
-          company: job.employer_name,
-          location: job.job_location || job.job_city || job.job_country,
-          url: job.job_apply_link
-        }));
-
-        break; // stop when we get data
       }
+    );
+
+    const data = await response.json();
+
+    if (!data?.data) return res.json({ jobs: [] });
+
+    let jobs = data.data;
+
+    // 🌍 FILTER BY COUNTRY
+    if (country) {
+      const c = country.toLowerCase();
+
+      jobs = jobs.filter(job => {
+        const loc = (job.job_country || "").toLowerCase();
+
+        if (c === "india") return loc.includes("in") || loc.includes("india");
+        if (c === "usa") return loc.includes("us");
+        if (c === "uk") return loc.includes("gb") || loc.includes("uk");
+        if (c === "canada") return loc.includes("ca");
+
+        return true;
+      });
     }
 
-    res.json({ jobs });
+    // 🔥 REMOVE DUPLICATE CITIES (FOR VARIETY)
+    const seenCities = new Set();
+    const finalJobs = [];
+
+    for (let job of jobs) {
+      const city = job.job_city || "unknown";
+
+      if (!seenCities.has(city)) {
+        seenCities.add(city);
+
+        finalJobs.push({
+          title: job.job_title,
+          company: job.employer_name,
+          location: city,
+          url: job.job_apply_link
+        });
+      }
+
+      if (finalJobs.length === 10) break;
+    }
+
+    res.json({ jobs: finalJobs });
 
   } catch (err) {
-    console.error(err);
+    console.error("JOB ERROR:", err);
     res.status(500).json({ error: "Job fetch failed" });
   }
 });
