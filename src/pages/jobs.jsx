@@ -1,38 +1,44 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 
 function Jobs() {
+  const [role, setRole] = useState("developer");
+  const [country, setCountry] = useState("india");
   const [jobs, setJobs] = useState([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetch("https://ats-master-production.up.railway.app/api/jobs?role=developer&country=india")
-      .then((res) => res.json())
-      .then((data) => {
-        setJobs(data.jobs || []);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error(err);
-        setLoading(false);
-      });
-  }, []);
+  const searchJobs = async () => {
+    const res = await fetch(
+      `https://ats-master-production.up.railway.app/api/jobs?role=${role}&country=${country}`
+    );
+    const data = await res.json();
+    setJobs(data.jobs || []);
+  };
 
   return (
     <div>
-      <h1>Job Matches</h1>
+      <h1>Job Search</h1>
 
-      {loading && <p>Loading jobs...</p>}
+      <input
+        placeholder="Role"
+        value={role}
+        onChange={(e) => setRole(e.target.value)}
+      />
 
-      {!loading && jobs.length === 0 && <p>No jobs found</p>}
+      <select
+        value={country}
+        onChange={(e) => setCountry(e.target.value)}
+      >
+        <option value="india">India</option>
+        <option value="usa">USA</option>
+      </select>
 
-      {jobs.map((job, index) => (
-        <div key={index} style={{ marginBottom: "20px" }}>
+      <button onClick={searchJobs}>Search</button>
+
+      {jobs.map((job, i) => (
+        <div key={i}>
           <h3>{job.title}</h3>
           <p>{job.company}</p>
           <p>{job.location}</p>
-          <a href={job.url} target="_blank" rel="noreferrer">
-            Apply Now
-          </a>
+          <a href={job.url} target="_blank">Apply</a>
         </div>
       ))}
     </div>
